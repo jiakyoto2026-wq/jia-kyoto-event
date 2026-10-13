@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>イベントお申し込み｜JIA京都地域会</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="site"><div class="wrap">
+    <div class="org">JIA京都地域会</div>
+    <div class="sub">イベントのお申し込み</div>
+  </div></header>
+  <main class="wrap" id="app"><p class="loading">読み込み中…</p></main>
+  <footer class="wrap foot">（公社）日本建築家協会 京都地域会</footer>
+
+  <script src="config.js"></script>
+  <script>
+  (function () {
+    const app = document.getElementById('app');
+    const O = BOOT.opts;
+    const P = BOOT.params || {};
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function run(action) {
+      const args = Array.prototype.slice.call(arguments, 1);
+      return fetch(window.JIA_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: action, args: args }),
+      }).then(r => r.json(), () => { throw new Error('通信できませんでした。時間をおいて再度お試しください。'); })
+        .then(j => { if (!j.ok) throw new Error(j.error); return j.data; });
+    }
+    function errMsg(e) { return String((e && e.message) || e).replace(/^Error:\s*/, '').replace(/^Exception:\s*/, ''); }
+    function top() { window.scrollTo(0, 0); }
+    function typeBadge(t) { return '<span class="badge' + (t === '建築と子供たち' ? ' kids' : '') + '">' + esc(t) + '</span>'; }
+    function stateBadge(st) {
+      if (!st) return '';
+      const extra = st.code === 'open' && st.remaining > 0 ? '（残り' + st.remaining + '名）' : '';
+      return '<span class="badge ' + esc(st.code) + '">' + esc(st.label + extra) + '</span>';
+    }
+    function meta(ev) {
+      const time = ev.start ? ' ' + ev.start + (ev.end ? '〜' + ev.end : '') : '';
+      return '<ul class="meta">' +
+        '<li><b>日時</b>' + esc(ev.dateLabel + time) + '</li>' +
+        (ev.place ? '<li><b>会場</b>' + esc(ev.place) + '</li>' : '') +
+        (ev.capacity ? '<li><b>定員</b>' + esc(ev.capacity) + '名</li>' : '') +
+        (ev.fee ? '<li><b>参加費</b>' + esc(ev.fee) + '</li>' : '') +
+        (ev.cpd ? '<li><b>CPD</b>' + esc(ev.cpd) + '</li>' : '') +
+        (ev.deadlineLabel ? '<li><b>申込締切</b>' + esc(ev.deadlineLabel) + '</li>' : '') +
+        '</ul>';
+    }
+
+    // ===== イベント一覧 =====
+    function showList() {
+      run('getPublicEvents').then(list => {
+        let h = '<h1>受付中のイベント</h1>';
+        if (!list.length) h += '<p class="muted">現在お申し込みを受け付けているイベントはありません。</p>';
+        list.forEach(ev => {
+          const can = ev.state.code === 'open' || ev.state.code === 'waitlist';
+          h += '<div class="card">' + typeBadge(ev.type) + stateBadge(ev.state) +
+            '<h3>' + esc(ev.title) + '</h3>' + meta(ev) +
+            '<div class="actions">' + (can
+              ? '<a class="btn" href="' + esc(BOOT.url + '?event=' + encodeURIComponent(ev.id)) + '">' + (ev.state.code === 'waitlist' ? 'キャンセル待ちで申し込む' : '詳細・お申し込み') + '</a>'
+              : '<a class="btn sub" href="' + esc(BOOT.url + '?event=' + encodeURIComponent(ev.id)) + '">詳細を見る</a>') +
+            '</div></div>';
+        });
+        app.innerHTML = h;
+      }).catch(e => { app.innerHTML = '<div class="notice ng">' + esc(errMsg(e)) + '</div>'; });
+    }
+
+    // ===== 申込フォーム =====
+    function showForm(eventId) {
+      run('getEventForApply', eventId).then(ev => renderForm(ev))
+        .catch(e => { app.innerHTML = '<div class="notice ng">' + esc(errMsg(e)) + '</div><p><a href="' + esc(BOOT.url) + '">イベント一覧へ</a></p>'; });
+    }
+
+    function radios(name, values) {
+      return '<div class="radios">' + values.map(v => '<label><input type="radio" name="' + name + '" value="' + esc(v) + '"> ' + esc(v) + '</label>').join('') + '</div>';
+    }
+    function opts(values, placeholder) {
+      return '<option value="">' + esc(placeholder) + '</option>' + values.map(v => '<option>' + esc(v) + '</option>').join('');
+    }
+
+    function generalFields() {
+      return '<h2>参加者の情報</h2>' +
+        '<div class="field"><span class="label req">参加区分</span>' + radios('category', O.categories) + '</div>' +
+        '<div class="row2"><div class="field"><label class="req" for="lastName">姓</label><input type="text" id="lastName" name="lastName" autocomplete="family-name"></div>' +
+        '<div class="field"><label class="req" for="firstName">名</label><input type="text" id="firstName" name="firstName" autocomplete="given-name"></div></div>' +
+        '<div class="row2"><div class="field"><label class="req" for="lastKana">セイ</label><input type="text" id="lastKana" name="lastKana"></div>' +
+        '<div class="field"><label class="req" for="firstKana">メイ</label><input type="text" id="firstKana" name="firstKana"></div></div>' +
+        '<div class="field"><label class="opt" for="cpdNo">CPD番号</label><input type="text" id="cpdNo" name="cpdNo" inputmode="latin">' +
+        '<div class="hint">CPD単位の登録を希望される方はご記入ください。</div></div>' +
+        contactFields('メールアドレス', '携帯電話番号');
+    }
+
+    function contactFields(mailLabel, telLabel) {
+      return '<div class="field"><label class="req" for="email">' + mailLabel + '</label><input type="email" id="email" name="email" autocomplete="email" inputmode="email"></div>' +
+        '<div class="field"><label class="req" for="email2">' + mailLabel + '（確認のためもう一度）</label><input type="email" id="email2" name="email2" autocomplete="off" inputmode="email"></div>' +
+        '<div class="field"><label class="req" for="phone">' + telLabel + '</label><input type="tel" id="phone" name="phone" autocomplete="tel" placeholder="090-1234-5678"></div>';
+    }
+
+    function kidsFields() {
+      return '<h2>参加するお子さま</h2>' +
+        '<p class="muted">小学生・中学生が対象です。ごきょうだいでのご参加は「お子さまを追加」から一緒にお申し込みいただけます（最大' + O.maxChildren + '名）。</p>' +
+        '<div id="children"></div>' +
+        '<button type="button" class="btn sub small" id="addChild">＋ お子さまを追加</button>' +
+        '<h2>保護者の方の情報</h2>' +
+        '<div class="row2"><div class="field"><label class="req" for="guardianLast">保護者 姓</label><input type="text" id="guardianLast" name="guardianLast" autocomplete="family-name"></div>' +
+        '<div class="field"><label class="req" for="guardianFirst">保護者 名</label><input type="text" id="guardianFirst" name="guardianFirst" autocomplete="given-name"></div></div>' +
+        contactFields('メールアドレス', '電話番号（当日つながる番号）') +
+        '<div class="field"><label class="req" for="zip">郵便番号</label><input type="text" id="zip" name="zip" inputmode="numeric" autocomplete="postal-code" placeholder="600-0000" style="max-width:12em"></div>' +
+        '<div class="field"><label class="req" for="address">住所</label><input type="text" id="address" name="address" autocomplete="street-address"></div>';
+    }
+
+    function childBlock(i) {
+      const p = 'c' + i + '_';
+      return '<div class="child" data-i="' + i + '"><h3>お子さま <span class="cno"></span></h3>' +
+        '<button type="button" class="btn sub small rm">削除</button>' +
+        '<div class="row2"><div class="field"><label class="req">姓</label><input type="text" name="' + p + 'lastName"></div>' +
+        '<div class="field"><label class="req">名</label><input type="text" name="' + p + 'firstName"></div></div>' +
+        '<div class="row2"><div class="field"><label class="req">セイ</label><input type="text" name="' + p + 'lastKana"></div>' +
+        '<div class="field"><label class="req">メイ</label><input type="text" name="' + p + 'firstKana"></div></div>' +
+        '<div class="row3"><div class="field"><label class="req">学年</label><select name="' + p + 'grade">' + opts(O.grades, '選択') + '</select></div>' +
+        '<div class="field"><label class="req">性別</label><select name="' + p + 'gender">' + opts(O.genders, '選択') + '</select></div></div>' +
+        '<div class="field"><label class="req">学校名</label><input type="text" name="' + p + 'school" placeholder="○○市立○○小学校"></div>' +
+        '</div>';
+    }
+
+    function renderForm(ev) {
+      const kids = ev.type === '建築と子供たち';
+      const st = ev.state;
+      const can = st.code === 'open' || st.code === 'waitlist';
+      let h = '<p><a href="' + esc(BOOT.url) + '">← イベント一覧</a></p>' +
+        '<div class="card">' + typeBadge(ev.type) + stateBadge(st) + '<h1>' + esc(ev.title) + '</h1>' + meta(ev) +
+        (ev.description ? '<div class="desc">' + esc(ev.description) + '</div>' : '') + '</div>';
+      if (!can) {
+        app.innerHTML = h + '<div class="notice warn">このイベントは現在お申し込みを受け付けていません（' + esc(st.label) + '）。</div>';
+        return;
+      }
+      if (st.code === 'waitlist') h += '<div class="notice warn">現在満席のため、<b>キャンセル待ち</b>としての受付になります。お席に空きが出た場合、受付順にメールでご連絡します。</div>';
+      else if (st.remaining > 0 && kids) h += '<div class="notice info">残り' + st.remaining + '名分です。お子さまの人数分のお席が必要です（人数が残席を超える場合、キャンセル待ちになります）。</div>';
+
+      h += '<form id="f" novalidate><div id="formBody">' + (kids ? kidsFields() : generalFields()) +
+        '<div class="field"><label class="opt" for="note">備考・ご質問</label><textarea id="note" name="note"></textarea></div>' +
+        '<p class="muted">' + esc(O.privacy) + '</p>' +
+        '<div id="err"></div>' +
+        '<div class="actions"><button type="submit" class="btn">入力内容を確認する</button></div></div>' +
+        '<div id="confirm" class="hidden"></div></form>';
+      app.innerHTML = h;
+
+      const form = document.getElementById('f');
+      let childSeq = 0;
+      function renumber() {
+        const list = form.querySelectorAll('.child');
+        list.forEach((el, idx) => {
+          el.querySelector('.cno').textContent = list.length > 1 ? (idx + 1) : '';
+          el.querySelector('.rm').classList.toggle('hidden', list.length === 1);
+        });
+        const add = document.getElementById('addChild');
+        if (add) add.classList.toggle('hidden', list.length >= O.maxChildren);
+      }
+      if (kids) {
+        const box = document.getElementById('children');
+        const addChild = () => { box.insertAdjacentHTML('beforeend', childBlock(childSeq++)); renumber(); };
+        addChild();
+        document.getElementById('addChild').addEventListener('click', addChild);
+        box.addEventListener('click', e => {
+          if (e.target.classList.contains('rm')) { e.target.closest('.child').remove(); renumber(); }
+        });
+      }
+
+      form.addEventListener('submit', e => {
+        e.preventDefault();
+        const data = collect(form, ev, kids);
+        const problem = check(data, kids);
+        const err = document.getElementById('err');
+        if (problem) { err.innerHTML = '<div class="notice ng">' + esc(problem) + '</div>'; err.scrollIntoView({ block: 'center' }); return; }
+        err.innerHTML = '';
+        showConfirm(form, ev, data, kids);
+      });
+    }
+
+    function val(form, name) { const el = form.elements[name]; return el ? String(el.value || '').trim() : ''; }
+
+    function collect(form, ev, kids) {
+      const d = { eventId: ev.id, email: val(form, 'email'), email2: val(form, 'email2'), phone: val(form, 'phone'), note: val(form, 'note') };
+      if (kids) {
+        d.guardianLast = val(form, 'guardianLast'); d.guardianFirst = val(form, 'guardianFirst');
+        d.zip = val(form, 'zip'); d.address = val(form, 'address');
+        d.children = Array.prototype.map.call(form.querySelectorAll('.child'), el => {
+          const p = 'c' + el.dataset.i + '_';
+          return { lastName: val(form, p + 'lastName'), firstName: val(form, p + 'firstName'),
+            lastKana: val(form, p + 'lastKana'), firstKana: val(form, p + 'firstKana'),
+            grade: val(form, p + 'grade'), gender: val(form, p + 'gender'), school: val(form, p + 'school') };
+        });
+      } else {
+        const r = form.querySelector('input[name=category]:checked');
+        d.category = r ? r.value : '';
+        d.lastName = val(form, 'lastName'); d.firstName = val(form, 'firstName');
+        d.lastKana = val(form, 'lastKana'); d.firstKana = val(form, 'firstKana');
+        d.cpdNo = val(form, 'cpdNo');
+      }
+      return d;
+    }
+
+    function check(d, kids) {
+      const kana = s => /^[ぁ-ゖァ-ヺー・\s　]+$/.test(s);
+      if (kids) {
+        for (let i = 0; i < d.children.length; i++) {
+          const c = d.children[i]; const n = d.children.length > 1 ? 'お子さま' + (i + 1) + 'の' : 'お子さまの';
+          if (!c.lastName || !c.firstName) return n + '氏名を入力してください。';
+          if (!c.lastKana || !c.firstKana) return n + 'フリガナを入力してください。';
+          if (!kana(c.lastKana) || !kana(c.firstKana)) return n + 'フリガナはカタカナで入力してください。';
+          if (!c.grade) return n + '学年を選択してください。';
+          if (!c.gender) return n + '性別を選択してください。';
+          if (!c.school) return n + '学校名を入力してください。';
+        }
+        if (!d.guardianLast || !d.guardianFirst) return '保護者の方のお名前を入力してください。';
+      } else {
+        if (!d.category) return '参加区分を選択してください。';
+        if (!d.lastName || !d.firstName) return 'お名前を入力してください。';
+        if (!d.lastKana || !d.firstKana) return 'フリガナを入力してください。';
+        if (!kana(d.lastKana) || !kana(d.firstKana)) return 'フリガナはカタカナで入力してください。';
+      }
+      if (!d.email) return 'メールアドレスを入力してください。';
+      if (d.email.toLowerCase() !== d.email2.toLowerCase()) return '確認用のメールアドレスが一致しません。';
+      if (!d.phone) return '電話番号を入力してください。';
+      if (kids && (!d.zip || !d.address)) return '郵便番号と住所を入力してください。';
+      return '';
+    }
+
+    function tr(k, v) { return v ? '<tr><th>' + esc(k) + '</th><td>' + esc(v) + '</td></tr>' : ''; }
+
+    function showConfirm(form, ev, d, kids) {
+      let rows = '';
+      if (kids) {
+        d.children.forEach((c, i) => {
+          rows += '<tr><th>お子さま' + (d.children.length > 1 ? i + 1 : '') + '</th><td>' + esc(c.lastName + ' ' + c.firstName) +
+            '（' + esc(c.lastKana + ' ' + c.firstKana) + '）<br>' + esc(c.grade + '／' + c.gender + '／' + c.school) + '</td></tr>';
+        });
+        rows += tr('保護者', d.guardianLast + ' ' + d.guardianFirst) + tr('メール', d.email) + tr('電話番号', d.phone) +
+          tr('住所', '〒' + d.zip + ' ' + d.address);
+      } else {
+        rows += tr('参加区分', d.category) + tr('お名前', d.lastName + ' ' + d.firstName + '（' + d.lastKana + ' ' + d.firstKana + '）') +
+          tr('CPD番号', d.cpdNo) + tr('メール', d.email) + tr('携帯電話', d.phone);
+      }
+      rows += tr('備考', d.note);
+      const wait = ev.state.code === 'waitlist';
+      const conf = document.getElementById('confirm');
+      conf.innerHTML = '<h2>入力内容の確認</h2><table class="conf">' + rows + '</table>' +
+        (wait ? '<div class="notice warn">キャンセル待ちとして受け付けます。</div>' : '') +
+        '<div id="err2"></div><div class="actions"><button type="button" class="btn" id="send">この内容で申し込む</button>' +
+        '<button type="button" class="btn sub" id="back">戻って修正する</button></div>';
+      document.getElementById('formBody').classList.add('hidden');
+      conf.classList.remove('hidden');
+      top();
+      document.getElementById('back').onclick = () => { conf.classList.add('hidden'); document.getElementById('formBody').classList.remove('hidden'); top(); };
+      const send = document.getElementById('send');
+      send.onclick = () => {
+        send.disabled = true; send.textContent = '送信中…';
+        run('submitApplication', d).then(res => showDone(ev, res, d)).catch(e => {
+          send.disabled = false; send.textContent = 'この内容で申し込む';
+          document.getElementById('err2').innerHTML = '<div class="notice ng">' + esc(errMsg(e)) + '</div>';
+        });
+      };
+    }
+
+    function showDone(ev, res, d) {
+      const ok = res.status === '申込済';
+      app.innerHTML = '<div class="card">' + typeBadge(ev.type) + '<h1>' + esc(ev.title) + '</h1>' +
+        (ok ? '<div class="notice ok"><b>お申し込みを受け付けました。</b></div>'
+            : '<div class="notice warn"><b>キャンセル待ち（' + esc(res.waitPos) + '番目）として受け付けました。</b><br>お席に空きが出た場合、メールでご連絡します。</div>') +
+        '<table class="conf">' + tr('申込番号', res.groupId) + tr('人数', res.count + '名') + tr('受付メールの送信先', d.email) + '</table>' +
+        '<p class="muted">確認メールをお送りしました。届かない場合は迷惑メールフォルダをご確認ください。キャンセルは、メールに記載のリンクからお手続きいただけます。</p>' +
+        '<div class="actions"><a class="btn sub" href="' + esc(BOOT.url) + '">イベント一覧へ</a></div></div>';
+      top();
+    }
+
+    // ===== キャンセル =====
+    function showCancel(token) {
+      run('getCancelInfo', token).then(info => {
+        const ev = info.event || {};
+        let h = '<h1>お申し込みのキャンセル</h1><div class="card">' + (ev.type ? typeBadge(ev.type) : '') +
+          '<h3>' + esc(ev.title) + '</h3>' + (ev.dateLabel ? meta(ev) : '') +
+          '<table class="conf">' + tr('申込番号', info.groupId) + tr('お名前', info.names.join('、')) + tr('現在の状態', info.status) + '</table></div>';
+        if (info.status === 'キャンセル') h += '<div class="notice info">このお申し込みはキャンセル済みです。</div>';
+        else if (!info.cancellable) h += '<div class="notice warn">開催日を過ぎているため、こちらからはキャンセルできません。</div>';
+        else h += '<div id="err"></div><div class="actions"><button class="btn danger" id="doCancel">お申し込みをキャンセルする</button></div>';
+        app.innerHTML = h;
+        const b = document.getElementById('doCancel');
+        if (b) b.onclick = () => {
+          if (!confirm('このお申し込みをキャンセルします。よろしいですか？\n（ごきょうだいでお申し込みの場合は全員分キャンセルになります）')) return;
+          b.disabled = true; b.textContent = '処理中…';
+          run('cancelByToken', token).then(() => {
+            app.innerHTML = '<h1>キャンセルを承りました</h1><div class="notice ok">「' + esc(ev.title) + '」のお申し込みをキャンセルしました。確認メールをお送りしています。</div>' +
+              '<p><a href="' + esc(BOOT.url) + '">イベント一覧へ</a></p>';
+          }).catch(e => {
+            b.disabled = false; b.textContent = 'お申し込みをキャンセルする';
+            document.getElementById('err').innerHTML = '<div class="notice ng">' + esc(errMsg(e)) + '</div>';
+          });
+        };
+      }).catch(e => { app.innerHTML = '<div class="notice ng">' + esc(errMsg(e)) + '</div>'; });
+    }
+
+    if (P.cancel) showCancel(P.cancel);
+    else if (P.event) showForm(P.event);
+    else showList();
+  })();
+  </script>
+</body>
+</html>

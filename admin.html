@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>イベント管理｜JIA京都地域会</title>
+  <meta name="robots" content="noindex">
+  <link rel="stylesheet" href="style.css">
+  <style>
+    .wrap { max-width: 1040px; }
+    .ev { display: grid; grid-template-columns: 1fr auto; gap: 8px 16px; align-items: start; }
+    .ev h3 { margin: 4px 0 2px; }
+    .nums { display: flex; gap: 14px; flex-wrap: wrap; font-size: 14px; margin-top: 6px; }
+    .nums b { font-size: 20px; }
+    .bar { height: 6px; background: #eceef1; border-radius: 3px; overflow: hidden; margin-top: 8px; max-width: 360px; }
+    .bar i { display: block; height: 100%; background: var(--ok); }
+    .evbtns { display: flex; flex-direction: column; gap: 6px; min-width: 9em; }
+    @media (max-width: 640px) { .ev { grid-template-columns: 1fr; } .evbtns { flex-direction: row; flex-wrap: wrap; } }
+    .tabs { display: flex; gap: 8px; margin: 0 0 16px; flex-wrap: wrap; }
+    .tabs .btn { font-weight: 600; }
+    .tblwrap { overflow-x: auto; background: #fff; border: 1px solid var(--line); border-radius: 8px; }
+    table.list { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+    table.list th, table.list td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; white-space: nowrap; vertical-align: top; }
+    table.list th { background: #f0f1f3; position: sticky; top: 0; }
+    table.list tr.cancel td { color: #9aa0a8; text-decoration: line-through; }
+    table.list tr.cancel td.keep { text-decoration: none; }
+    .st { font-weight: 700; }
+    .st.ok { color: var(--ok); } .st.wait { color: var(--warn); } .st.cancel { color: var(--muted); }
+    .urlbox { display: flex; gap: 6px; margin-top: 8px; }
+    .urlbox input { font-size: 12px; padding: 4px 8px; }
+  </style>
+</head>
+<body>
+  <header class="site"><div class="wrap">
+    <div class="org">JIA京都地域会</div>
+    <div class="sub">イベント管理（役員用）</div>
+  </div></header>
+  <main class="wrap" id="app"></main>
+
+  <script src="config.js"></script>
+  <script>
+  (function () {
+    const app = document.getElementById('app');
+    const O = BOOT.opts;
+    let PW = '';
+    let cache = null;
+    try { PW = sessionStorage.getItem('jiaAdminPw') || ''; } catch (e) {}
+
+    function esc(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function run(action) {
+      const args = Array.prototype.slice.call(arguments, 1);
+      return fetch(window.JIA_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: action, args: args }),
+      }).then(r => r.json(), () => { throw new Error('通信できませんでした。時間をおいて再度お試しください。'); })
+        .then(j => { if (!j.ok) throw new Error(j.error); return j.data; });
+    }
+    function errMsg(e) { return String((e && e.message) || e).replace(/^Error:\s*/, '').replace(/^Exception:\s*/, ''); }
+    function fail(e) {
+      const m = errMsg(e);
+      if (/パスワード/.test(m)) { PW = ''; try { sessionStorage.removeItem('jiaAdminPw'); } catch (x) {} showLogin(m); return; }
+      alert(m);
+    }
+    function wd(s) { if (!s) return ''; const p = s.split('-').map(Number); const d = new Date(p[0], p[1] - 1, p[2]); return p[1] + '/' + p[2] + '（' + '日月火水木金土'[d.getDay()] + '）'; }
+
+    // ===== ログイン =====
+    function showLogin(msg) {
+      app.innerHTML = '<div class="card" style="max-width:420px;margin:40px auto"><h1>役員用ログイン</h1>' +
+        (msg ? '<div class="notice ng">' + esc(msg) + '</div>' : '') +
+        '<form id="lf"><div class="field"><label for="pw">パスワード</label><input type="password" id="pw" autocomplete="current-password"></div>' +
+        '<div class="actions"><button class="btn" type="submit">ログイン</button></div></form></div>';
+      document.getElementById('lf').onsubmit = e => {
+        e.preventDefault();
+        const v = document.getElementById('pw').value;
+        run('adminLogin', v).then(() => {
+          PW = v; try { sessionStorage.setItem('jiaAdminPw', v); } catch (x) {}
+          showEvents();
+        }).catch(err => showLogin(errMsg(err)));
+      };
+    }
+
+    function tabs(active) {
+      return '<div class="tabs">' +
+        '<button class="btn ' + (active === 'list' ? '' : 'sub') + ' small" data-go="list">イベント一覧・申込状況</button>' +
+        '<button class="btn ' + (active === 'new' ? '' : 'sub') + ' small" data-go="new">＋ 新しいイベントを作る</button>' +
+        (cache && cache.sheetUrl ? '<a class="btn sub small" target="_blank" href="' + esc(cache.sheetUrl) + '">スプレッドシートを開く</a>' : '') +
+        '<a class="btn sub small" target="_blank" href="' + esc(BOOT.url) + '">申込ページ（公開側）</a>' +
+        '<button class="btn sub small" data-go="logout">ログアウト</button></div>';
+    }
+    function bindTabs() {
+      app.querySelectorAll('[data-go]').forEach(b => b.onclick = () => {
+        const g = b.dataset.go;
+        if (g === 'list') showEvents();
+        else if (g === 'new') showEdit(null);
+        else if (g === 'logout') { PW = ''; try { sessionStorage.removeItem('jiaAdminPw'); } catch (x) {} showLogin(); }
+      });
+    }
+
+    // ===== 一覧 =====
+    function showEvents() {
+      app.innerHTML = '<p class="loading">読み込み中…</p>';
+      run('adminGetEvents', PW).then(data => {
+        cache = data;
+        let h = tabs('list') + '<h1>イベント一覧・申込状況</h1>';
+        if (!data.events.length) h += '<p class="muted">まだイベントがありません。「＋ 新しいイベントを作る」から登録してください。</p>';
+        const upcoming = data.events.filter(e => e.date >= data.today).reverse();
+        const past = data.events.filter(e => e.date < data.today);
+        if (upcoming.length) h += '<h2>これから開催</h2>' + upcoming.map(card).join('');
+        if (past.length) h += '<h2>終了したイベント</h2>' + past.map(card).join('');
+        app.innerHTML = h;
+        bindTabs();
+        app.querySelectorAll('[data-act]').forEach(b => b.onclick = () => {
+          const ev = data.events.find(x => x.id === b.dataset.id);
+          const a = b.dataset.act;
+          if (a === 'apps') showApplicants(ev.id);
+          else if (a === 'edit') showEdit(ev);
+          else if (a === 'copy') { const c = Object.assign({}, ev); delete c.id; c.status = '下書き'; c.title = c.title + '（コピー）'; showEdit(c); }
+        });
+        app.querySelectorAll('.urlbox input').forEach(i => i.onclick = () => i.select());
+      }).catch(fail);
+    }
+
+    function card(ev) {
+      const c = ev.counts; const cap = Number(ev.capacity) || 0;
+      const pct = cap ? Math.min(100, Math.round(c.ok / cap * 100)) : 0;
+      const url = BOOT.url + '?event=' + encodeURIComponent(ev.id);
+      const time = ev.start ? ' ' + ev.start + (ev.end ? '〜' + ev.end : '') : '';
+      return '<div class="card ev"><div>' +
+        '<span class="badge' + (ev.type === '建築と子供たち' ? ' kids' : '') + '">' + esc(ev.type) + '</span>' +
+        '<span class="badge ' + esc(ev.state.code) + '">' + esc(ev.state.label) + '</span>' +
+        '<h3>' + esc(ev.title) + '</h3>' +
+        '<div class="muted">' + esc(ev.date.replace(/-/g, '/') + ' ' + wd(ev.date).replace(/^\S+?（/, '（') + time) +
+        (ev.place ? '　' + esc(ev.place) : '') + '<br>担当：' + esc(ev.contactName) +
+        (ev.deadline ? '　締切：' + esc(wd(ev.deadline)) : '') + '</div>' +
+        '<div class="nums"><span>申込済 <b>' + c.ok + '</b>' + (cap ? ' / ' + cap + '名' : '名（定員なし）') + '</span>' +
+        '<span>キャンセル待ち <b>' + c.wait + '</b>名</span><span class="muted">キャンセル ' + c.cancel + '名</span></div>' +
+        (cap ? '<div class="bar"><i style="width:' + pct + '%"></i></div>' : '') +
+        (ev.status !== '下書き' ? '<div class="urlbox"><input type="text" readonly value="' + esc(url) + '" title="申込ページのURL（クリックで選択）"></div>' : '') +
+        '</div><div class="evbtns">' +
+        '<button class="btn small" data-act="apps" data-id="' + esc(ev.id) + '">申込者を見る</button>' +
+        '<button class="btn sub small" data-act="edit" data-id="' + esc(ev.id) + '">設定を編集</button>' +
+        '<button class="btn sub small" data-act="copy" data-id="' + esc(ev.id) + '">複製して新規</button>' +
+        '</div></div>';
+    }
+
+    // ===== 編集 =====
+    function sel(name, values, cur) {
+      return '<select name="' + name + '">' + values.map(v => '<option' + (v === cur ? ' selected' : '') + '>' + esc(v) + '</option>').join('') + '</select>';
+    }
+    function inp(name, type, v, extra) {
+      return '<input type="' + type + '" name="' + name + '" value="' + esc(v == null ? '' : v) + '"' + (extra || '') + '>';
+    }
+
+    function showEdit(ev) {
+      const isNew = !ev || !ev.id;
+      ev = ev || { type: O.types[0], status: '下書き', capacity: '20', waitlist: '受け付ける', waitlistMax: '0' };
+      let h = tabs(isNew ? 'new' : '') + '<h1>' + (isNew ? '新しいイベント' : 'イベント設定の編集') + '</h1>' +
+        '<form id="ef" class="card" novalidate>' +
+        '<h2 style="margin-top:0">基本情報</h2>' +
+        '<div class="field"><span class="label req">種別</span>' + sel('type', O.types, ev.type) +
+        '<div class="hint">「建築と子供たち」を選ぶと、申込フォームがお子さま（学年・学校名・性別）＋保護者の連絡先の形式になります。</div></div>' +
+        '<div class="field"><label class="req">タイトル</label>' + inp('title', 'text', ev.title) + '</div>' +
+        '<div class="row3"><div class="field"><label class="req">開催日</label>' + inp('date', 'date', ev.date) + '</div>' +
+        '<div class="field"><label class="opt">開始時刻</label>' + inp('start', 'time', ev.start) + '</div>' +
+        '<div class="field"><label class="opt">終了時刻</label>' + inp('end', 'time', ev.end) + '</div></div>' +
+        '<div class="field"><label class="opt">会場・集合場所</label>' + inp('place', 'text', ev.place) + '</div>' +
+        '<div class="field"><label class="opt">内容・ご案内</label><textarea name="description" rows="6">' + esc(ev.description) + '</textarea>' +
+        '<div class="hint">申込ページに表示されます（持ち物・対象学年・注意事項など）。</div></div>' +
+        '<div class="row2"><div class="field"><label class="opt">参加費</label>' + inp('fee', 'text', ev.fee, ' placeholder="無料／会員1,000円・一般2,000円 など"') + '</div>' +
+        '<div class="field"><label class="opt">CPD単位</label>' + inp('cpd', 'text', ev.cpd, ' placeholder="建築CPD 2単位 など"') + '</div></div>' +
+        '<h2>定員・受付</h2>' +
+        '<div class="row3"><div class="field"><label class="req">定員（名）</label>' + inp('capacity', 'number', ev.capacity, ' min="0"') +
+        '<div class="hint">0 = 定員なし。定員に達すると自動で締め切ります。</div></div>' +
+        '<div class="field"><label class="req">キャンセル待ち</label>' + sel('waitlist', ['受け付ける', '受け付けない'], ev.waitlist) + '</div>' +
+        '<div class="field"><label class="opt">キャンセル待ち上限（名）</label>' + inp('waitlistMax', 'number', ev.waitlistMax || '0', ' min="0"') +
+        '<div class="hint">0 = 上限なし</div></div></div>' +
+        '<div class="row2"><div class="field"><label class="opt">申込締切日</label>' + inp('deadline', 'date', ev.deadline) +
+        '<div class="hint">この日の終わりまで受付。空欄なら開催日当日まで。</div></div>' +
+        '<div class="field"><label class="req">公開状態</label>' + sel('status', ['下書き', '公開', '受付停止'], ev.status) +
+        '<div class="hint">「公開」にすると申込ページに表示されます。</div></div></div>' +
+        '<h2>担当者（申込通知の送り先）</h2>' +
+        '<div class="row2"><div class="field"><label class="req">担当者名</label>' + inp('contactName', 'text', ev.contactName) + '</div>' +
+        '<div class="field"><label class="req">担当者メール</label>' + inp('contactEmail', 'text', ev.contactEmail) +
+        '<div class="hint">複数はカンマ区切り。申込・キャンセル・繰り上げのたびに通知が届きます。</div></div></div>' +
+        '<div id="eerr"></div><div class="actions"><button class="btn" type="submit">保存する</button>' +
+        '<button class="btn sub" type="button" id="cancelEdit">一覧に戻る</button></div></form>';
+      app.innerHTML = h;
+      bindTabs();
+      document.getElementById('cancelEdit').onclick = showEvents;
+      const f = document.getElementById('ef');
+      f.onsubmit = e => {
+        e.preventDefault();
+        const d = {};
+        Array.prototype.forEach.call(f.elements, el => { if (el.name) d[el.name] = el.value; });
+        if (!isNew) d.id = ev.id;
+        const btn = f.querySelector('button[type=submit]');
+        btn.disabled = true; btn.textContent = '保存中…';
+        run('adminSaveEvent', PW, d).then(res => {
+          if (res.promoted) alert('保存しました。空席ができたため、キャンセル待ちから ' + res.promoted + ' 件を繰り上げ、ご本人と担当者に通知しました。');
+          showEvents();
+        }).catch(err => {
+          btn.disabled = false; btn.textContent = '保存する';
+          const m = errMsg(err);
+          if (/パスワード/.test(m)) return fail(err);
+          document.getElementById('eerr').innerHTML = '<div class="notice ng">' + esc(m) + '</div>';
+        });
+      };
+    }
+
+    // ===== 申込者一覧 =====
+    function showApplicants(eventId) {
+      app.innerHTML = '<p class="loading">読み込み中…</p>';
+      run('adminGetApplicants', PW, eventId).then(data => {
+        const ev = data.event; const kids = ev.type === '建築と子供たち';
+        const rows = data.rows;
+        const cols = kids
+          ? [['status', '状態'], ['groupId', '申込番号'], ['order', '受付順'], ['lastName', '姓'], ['firstName', '名'], ['lastKana', 'セイ'], ['firstKana', 'メイ'],
+             ['grade', '学年'], ['school', '学校名'], ['gender', '性別'], ['guardianLast', '保護者姓'], ['guardianFirst', '保護者名'],
+             ['email', 'メール'], ['phone', '電話'], ['zip', '〒'], ['address', '住所'], ['note', '備考'], ['appliedAt', '申込日時']]
+          : [['status', '状態'], ['groupId', '申込番号'], ['order', '受付順'], ['category', '区分'], ['lastName', '姓'], ['firstName', '名'],
+             ['lastKana', 'セイ'], ['firstKana', 'メイ'], ['cpdNo', 'CPD番号'], ['email', 'メール'], ['phone', '携帯'], ['note', '備考'], ['appliedAt', '申込日時']];
+        const cnt = s => rows.filter(r => r.status === s).length;
+        const stCls = s => s === '申込済' ? 'ok' : s === 'キャンセル待ち' ? 'wait' : 'cancel';
+        const seen = {};
+        let body = rows.map(r => {
+          const first = !seen[r.groupId]; seen[r.groupId] = true;
+          const btn = first && r.status !== 'キャンセル'
+            ? '<button class="btn sub small" data-cancel="' + esc(r.groupId) + '">取消</button>' : '';
+          return '<tr class="' + (r.status === 'キャンセル' ? 'cancel' : '') + '"><td class="keep">' + btn + '</td>' +
+            cols.map(c => c[0] === 'status' ? '<td class="keep"><span class="st ' + stCls(r.status) + '">' + esc(r.status) + '</span></td>' : '<td>' + esc(r[c[0]]) + '</td>').join('') + '</tr>';
+        }).join('');
+        const emails = Array.from(new Set(rows.filter(r => r.status === '申込済').map(r => r.email))).join(', ');
+        app.innerHTML = tabs('') + '<p><a href="#" id="back">← イベント一覧</a></p>' +
+          '<h1>' + esc(ev.title) + '</h1><p class="muted">' + esc(ev.date.replace(/-/g, '/') + ' ' + (ev.start || '')) + '　担当：' + esc(ev.contactName) + '</p>' +
+          '<div class="nums" style="margin-bottom:12px"><span>申込済 <b>' + cnt('申込済') + '</b>' + (Number(ev.capacity) ? ' / ' + ev.capacity + '名' : '名') + '</span>' +
+          '<span>キャンセル待ち <b>' + cnt('キャンセル待ち') + '</b>名</span><span class="muted">キャンセル ' + cnt('キャンセル') + '名</span></div>' +
+          (rows.length ? '<div class="tblwrap"><table class="list"><thead><tr><th></th>' + cols.map(c => '<th>' + esc(c[1]) + '</th>').join('') + '</tr></thead><tbody>' + body + '</tbody></table></div>'
+                       : '<p class="muted">まだお申し込みはありません。</p>') +
+          (emails ? '<h2>参加確定者のメールアドレス（一斉連絡用）</h2><textarea readonly rows="3" onclick="this.select()">' + esc(emails) + '</textarea>' +
+            '<p class="hint">一斉送信の際は、個人情報保護のため必ず BCC に入れてください。</p>' : '') +
+          '<p class="hint">「取消」は申込単位（ごきょうだいは全員分）でキャンセルし、空いた席はキャンセル待ちから自動で繰り上げます。</p>';
+        bindTabs();
+        document.getElementById('back').onclick = e => { e.preventDefault(); showEvents(); };
+        app.querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => {
+          const gid = b.dataset.cancel;
+          if (!confirm('申込番号 ' + gid + ' をキャンセル扱いにします。よろしいですか？')) return;
+          const notify = confirm('申込者ご本人にキャンセル通知メールを送りますか？\n［OK］送る　［キャンセル］送らない');
+          b.disabled = true;
+          run('adminCancelGroup', PW, gid, notify).then(() => showApplicants(eventId)).catch(fail);
+        });
+      }).catch(fail);
+    }
+
+    if (PW) run('adminLogin', PW).then(showEvents).catch(() => showLogin());
+    else showLogin();
+  })();
+  </script>
+</body>
+</html>
