@@ -1,6 +1,6 @@
 // ===== 設定 =====
 // GAS（Apps Script）をウェブアプリとしてデプロイしたときのURL（…/exec）を貼り付けてください。
-window.JIA_API_URL = 'https://script.google.com/macros/s/AKfycbx6moocAvP0rYOhN42sB_svqixfD0MBU-QoJsqUn28itdo0FEPd9ZcPRDowVdv4IVrJ6g/exec;
+window.JIA_API_URL = 'https://script.google.com/macros/s/AKfycbx6moocAvP0rYOhN42sB_svqixfD0MBU-QoJsqUn28itdo0FEPd9ZcPRDowVdv4IVrJ6g/exec';
 
 // フォームの選択肢（サーバー側 Code.gs の定数と合わせてください。入力チェックはサーバー側でも行います）
 window.JIA_OPTS = {
