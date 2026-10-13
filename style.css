@@ -25,6 +25,7 @@
   .badge.kids { background: var(--kids-soft); color: var(--kids); }
   .badge.open { background: var(--ok-soft); color: var(--ok); }
   .badge.waitlist { background: var(--warn-soft); color: var(--warn); }
+  .badge.before { background: var(--accent-soft); color: var(--accent); }
   .badge.full, .badge.closed { background: #eceef1; color: var(--muted); }
   .meta { margin: 6px 0 0; padding: 0; list-style: none; font-size: 14px; }
   .meta li { padding: 1px 0; }

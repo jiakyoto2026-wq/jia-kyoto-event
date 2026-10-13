@@ -24,14 +24,49 @@
     function esc(s) {
       return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     }
-    function run(action) {
-      const args = Array.prototype.slice.call(arguments, 1);
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+    function retryErr(m) { const e = new Error(m); e.retry = true; return e; }
+    // 1回の通信。混雑・通信エラーは「再送してよい」印（retry）をつけて返す
+    function call(action, args) {
       return fetch(window.JIA_API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify({ action: action, args: args }),
-      }).then(r => r.json(), () => { throw new Error('通信できませんでした。時間をおいて再度お試しください。'); })
-        .then(j => { if (!j.ok) throw new Error(j.error); return j.data; });
+      }).then(r => r.text(), () => { throw retryErr('通信できませんでした。'); })
+        .then(t => {
+          let j;
+          try { j = JSON.parse(t); } catch (e) { throw retryErr('サーバーが混み合っています。'); }
+          if (!j.ok) { const e = new Error(j.error); e.retry = !!j.retry; throw e; }
+          return j.data;
+        });
+    }
+    // 混雑時は間隔を空けて自動で再送する
+    function runRetry(opts, action, args) {
+      const max = opts.tries || 4;
+      let n = 0;
+      const attempt = () => call(action, args).catch(e => {
+        n++;
+        if (!e.retry) throw e;
+        if (n >= max) throw new Error(opts.busyMsg || 'ただいま大変混み合っています。少し時間をおいて、ページを再読み込みしてください。');
+        if (opts.onRetry) opts.onRetry(n);
+        return sleep(Math.min(8000, 1000 * Math.pow(1.6, n)) + Math.random() * 1500).then(attempt);
+      });
+      return attempt();
+    }
+    function run(action) {
+      return runRetry({}, action, Array.prototype.slice.call(arguments, 1));
+    }
+    function makeId() {
+      try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (e) {}
+      return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12) + Math.random().toString(36).slice(2, 12);
+    }
+    function remainText(ms) {
+      const t = Math.max(0, Math.ceil(ms / 1000));
+      const d = Math.floor(t / 86400), h = Math.floor(t % 86400 / 3600), m = Math.floor(t % 3600 / 60), sec = t % 60;
+      if (d) return d + '日' + h + '時間';
+      if (h) return h + '時間' + m + '分';
+      if (m) return m + '分' + sec + '秒';
+      return sec + '秒';
     }
     function errMsg(e) { return String((e && e.message) || e).replace(/^Error:\s*/, '').replace(/^Exception:\s*/, ''); }
     function top() { window.scrollTo(0, 0); }
@@ -49,6 +84,7 @@
         (ev.capacity ? '<li><b>定員</b>' + esc(ev.capacity) + '名</li>' : '') +
         (ev.fee ? '<li><b>参加費</b>' + esc(ev.fee) + '</li>' : '') +
         (ev.cpd ? '<li><b>CPD</b>' + esc(ev.cpd) + '</li>' : '') +
+        (ev.openAtLabel ? '<li><b>受付開始</b>' + esc(ev.openAtLabel) + '</li>' : '') +
         (ev.deadlineLabel ? '<li><b>申込締切</b>' + esc(ev.deadlineLabel) + '</li>' : '') +
         '</ul>';
     }
@@ -59,11 +95,12 @@
         let h = '<h1>受付中のイベント</h1>';
         if (!list.length) h += '<p class="muted">現在お申し込みを受け付けているイベントはありません。</p>';
         list.forEach(ev => {
-          const can = ev.state.code === 'open' || ev.state.code === 'waitlist';
+          const can = ['open', 'waitlist', 'before'].indexOf(ev.state.code) >= 0;
+          const label = ev.state.code === 'waitlist' ? 'キャンセル待ちで申し込む' : ev.state.code === 'before' ? '詳細を見る・事前に入力する' : '詳細・お申し込み';
           h += '<div class="card">' + typeBadge(ev.type) + stateBadge(ev.state) +
             '<h3>' + esc(ev.title) + '</h3>' + meta(ev) +
             '<div class="actions">' + (can
-              ? '<a class="btn" href="' + esc(BOOT.url + '?event=' + encodeURIComponent(ev.id)) + '">' + (ev.state.code === 'waitlist' ? 'キャンセル待ちで申し込む' : '詳細・お申し込み') + '</a>'
+              ? '<a class="btn" href="' + esc(BOOT.url + '?event=' + encodeURIComponent(ev.id)) + '">' + label + '</a>'
               : '<a class="btn sub" href="' + esc(BOOT.url + '?event=' + encodeURIComponent(ev.id)) + '">詳細を見る</a>') +
             '</div></div>';
         });
@@ -132,7 +169,9 @@
     function renderForm(ev) {
       const kids = ev.type === '建築と子供たち';
       const st = ev.state;
-      const can = st.code === 'open' || st.code === 'waitlist';
+      const can = ['open', 'waitlist', 'before'].indexOf(st.code) >= 0;
+      // 受付開始時刻（端末の時計のずれに影響されないよう、サーバーからの残り時間で計算）
+      ev._openTarget = st.code === 'before' ? Date.now() + st.msUntilOpen + 1000 : 0;
       let h = '<p><a href="' + esc(BOOT.url) + '">← イベント一覧</a></p>' +
         '<div class="card">' + typeBadge(ev.type) + stateBadge(st) + '<h1>' + esc(ev.title) + '</h1>' + meta(ev) +
         (ev.description ? '<div class="desc">' + esc(ev.description) + '</div>' : '') + '</div>';
@@ -140,7 +179,8 @@
         app.innerHTML = h + '<div class="notice warn">このイベントは現在お申し込みを受け付けていません（' + esc(st.label) + '）。</div>';
         return;
       }
-      if (st.code === 'waitlist') h += '<div class="notice warn">現在満席のため、<b>キャンセル待ち</b>としての受付になります。お席に空きが出た場合、受付順にメールでご連絡します。</div>';
+      if (st.code === 'before') h += '<div class="notice info"><b>受付開始は ' + esc(st.openAtLabel) + ' です。</b><br>今のうちに入力して確認画面まで進めておけば、開始時刻になると「この内容で申し込む」ボタンが押せるようになります（ページの再読み込みは不要です）。</div>';
+      else if (st.code === 'waitlist') h += '<div class="notice warn">現在満席のため、<b>キャンセル待ち</b>としての受付になります。お席に空きが出た場合、受付順にメールでご連絡します。</div>';
       else if (st.remaining > 0 && kids) h += '<div class="notice info">残り' + st.remaining + '名分です。お子さまの人数分のお席が必要です（人数が残席を超える場合、キャンセル待ちになります）。</div>';
 
       h += '<form id="f" novalidate><div id="formBody">' + (kids ? kidsFields() : generalFields()) +
@@ -259,9 +299,26 @@
       top();
       document.getElementById('back').onclick = () => { conf.classList.add('hidden'); document.getElementById('formBody').classList.remove('hidden'); top(); };
       const send = document.getElementById('send');
+      // 自動再送しても二重登録にならないよう、この確認画面ごとに送信IDを1つ決める
+      d.reqId = makeId();
+      if (ev._openTarget && Date.now() < ev._openTarget) {
+        send.disabled = true;
+        const tick = () => {
+          if (!document.body.contains(send)) return;
+          const left = ev._openTarget - Date.now();
+          if (left > 0) { send.textContent = '受付開始まで あと ' + remainText(left); setTimeout(tick, left > 60000 ? 1000 : 250); }
+          else { send.disabled = false; send.textContent = 'この内容で申し込む'; }
+        };
+        tick();
+      }
       send.onclick = () => {
-        send.disabled = true; send.textContent = '送信中…';
-        run('submitApplication', d).then(res => showDone(ev, res, d)).catch(e => {
+        send.disabled = true; send.textContent = '送信中…（そのままお待ちください）';
+        document.getElementById('err2').innerHTML = '';
+        runRetry({
+          tries: 8,
+          busyMsg: 'ただいま大変混み合っています。少し時間をおいて、もう一度「この内容で申し込む」を押してください（同じ内容が二重に登録されることはありません）。',
+          onRetry: n => { send.textContent = '混み合っています。自動で再送中…（' + n + '回目）'; },
+        }, 'submitApplication', [d]).then(res => showDone(ev, res, d)).catch(e => {
           send.disabled = false; send.textContent = 'この内容で申し込む';
           document.getElementById('err2').innerHTML = '<div class="notice ng">' + esc(errMsg(e)) + '</div>';
         });

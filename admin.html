@@ -134,6 +134,7 @@
         '<h3>' + esc(ev.title) + '</h3>' +
         '<div class="muted">' + esc(ev.date.replace(/-/g, '/') + ' ' + wd(ev.date).replace(/^\S+?（/, '（') + time) +
         (ev.place ? '　' + esc(ev.place) : '') + '<br>担当：' + esc(ev.contactName) +
+        (ev.openAt ? '　受付開始：' + esc(wd(ev.openAt.slice(0, 10)) + ' ' + ev.openAt.slice(11, 16)) : '') +
         (ev.deadline ? '　締切：' + esc(wd(ev.deadline)) : '') + '</div>' +
         '<div class="nums"><span>申込済 <b>' + c.ok + '</b>' + (cap ? ' / ' + cap + '名' : '名（定員なし）') + '</span>' +
         '<span>キャンセル待ち <b>' + c.wait + '</b>名</span><span class="muted">キャンセル ' + c.cancel + '名</span></div>' +
@@ -177,6 +178,8 @@
         '<div class="field"><label class="req">キャンセル待ち</label>' + sel('waitlist', ['受け付ける', '受け付けない'], ev.waitlist) + '</div>' +
         '<div class="field"><label class="opt">キャンセル待ち上限（名）</label>' + inp('waitlistMax', 'number', ev.waitlistMax || '0', ' min="0"') +
         '<div class="hint">0 = 上限なし</div></div></div>' +
+        '<div class="row2"><div class="field"><label class="opt">受付開始日時</label>' + inp('openAt', 'datetime-local', (ev.openAt || '').replace(' ', 'T')) +
+        '<div class="hint">例：2026/11/01 9:00。空欄なら「公開」にした時点から受付。開始前は申込ページに「受付開始前」と表示され、事前入力だけできます。</div></div></div>' +
         '<div class="row2"><div class="field"><label class="opt">申込締切日</label>' + inp('deadline', 'date', ev.deadline) +
         '<div class="hint">この日の終わりまで受付。空欄なら開催日当日まで。</div></div>' +
         '<div class="field"><label class="req">公開状態</label>' + sel('status', ['下書き', '公開', '受付停止'], ev.status) +
